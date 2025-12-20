@@ -1,0 +1,92 @@
+---
+# Jenkins가 K8s를 “배포”할 권한(RBAC)
+
+---
+# Jenkins가 K8s API를 호출할 때의 신분(토큰/권한의 주체)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins
+  namespace: cicd
+
+---
+# app 네임스페이스에서 "배포"에 필요한 최소 권한
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-deployer
+  namespace: app
+rules:
+  # =========================
+  # Deployments / ReplicaSets
+  # - apply/rollout/status 확인에 필요
+  # =========================
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # =========================
+  # Pods
+  # - rollout 중 Pod 상태 확인, 문제 발생 시 logs/exec까지 열어줄지 선택
+  # =========================
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+  # (선택) Jenkins에서 디버깅까지 하려면 아래 추가
+   - apiGroups: [""]
+     resources: ["pods/log"]
+     verbs: ["get"]
+   - apiGroups: [""]
+     resources: ["pods/exec"]
+     verbs: ["create"]
+
+  # =========================
+  # Services
+  # =========================
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # =========================
+  # ConfigMaps / Secrets
+  # - 배포 시 envFrom, volumeMount 등에 쓰면 조회가 필요
+  # - "생성/수정"은 보안상 막아두는 게 일반적(원하면 열기)
+  # =========================
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+
+  # =========================
+  # Events (선택)
+  # - 실패 원인 파악에 도움이 됨
+  # =========================
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+
+  # =========================
+  # Ingress를 쓴다면 (선택)
+  # =========================
+  # - apiGroups: ["networking.k8s.io"]
+  #   resources: ["ingresses"]
+  #   verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+---
+# cicd/jenkins ServiceAccount에게 app namespace에서 위 Role을 부여
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-deployer-binding
+  namespace: app
+subjects:
+  - kind: ServiceAccount
+    name: jenkins
+    namespace: cicd
+roleRef:
+  kind: Role
+  name: jenkins-deployer
+  apiGroup: rbac.authorization.k8s.io
