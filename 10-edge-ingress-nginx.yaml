@@ -45,6 +45,12 @@ rules:                                     # 권한 규칙 목록
     resources: ["ingresses", "ingressclasses", "ingresses/status"]  # 접근할 리소스들
     verbs: ["get", "list", "watch", "update"] # 동작: 조회/목록/감시 + status 업데이트용 update
 
+  # ✅ Leader Election용 Lease 권한 (필수)
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+
 ##### 왜 "update"가 필요하냐? #####
 # ingress-nginx는 Ingress의 상태(로드밸런서 주소 등)를 status에 기록하는 경우가 있다.
 # 이때 ingresses/status 업데이트 권한이 필요할 수 있어 update가 포함됨.
