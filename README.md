@@ -232,7 +232,7 @@ https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" \\
 
 
 # ✅ 11 Jenkins + Kubernetes 배포 적용 절차 (실행 순서 & 체크포인트)
-
+```text
 ────────────────────────────────────────
 0️⃣ 노드 준비 (권한 설정)
 ────────────────────────────────────────
@@ -339,5 +339,6 @@ cat /var/jenkins_home/secrets/initialAdminPassword
 [ ] cicd 네임스페이스에 jenkins-ingress 존재  
 [ ] DNS가 서버 IP를 정상적으로 가리킴  
 [ ] 브라우저 접속 시 Jenkins 화면 출력됨  
-
 ────────────────────────────────────────
+```
+
