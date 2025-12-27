@@ -1,92 +1,130 @@
 ---
-# Jenkins가 K8s를 “배포”할 권한(RBAC)
+###### 
+# ==========================================
+# Jenkins RBAC (minimal, practical)
+# - 목적: Jenkins가 Kubernetes에 "배포(kubectl apply / set image / rollout status 등)"를 할 수 있도록
+#        Jenkins Pod에 붙는 ServiceAccount에 최소 권한을 부여한다.
+# - 핵심 개념: 
+#   * ServiceAccount = "쿠버 안에서 돌아가는 프로그램(젠킨스)의 신분증"
+#   * Role          = "그 신분증이 할 수 있는 일(권한 목록)"
+#   * RoleBinding   = "신분증(ServiceAccount) ↔ 권한(Role)을 연결"
+# - 운영 정석: namespace 단위로 최소권한(RBAC)을 분리한다.
+#   cicd에만 배포하면 cicd에만 Role/RoleBinding 생성.
+#   infra/app 등 다른 namespace에 배포하려면 "그 namespace에도 Role(또는 RoleBinding)"을 추가해야 한다.
+# ==========================================
+######
 
----
-# Jenkins가 K8s API를 호출할 때의 신분(토큰/권한의 주체)
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: jenkins
-  namespace: cicd
+apiVersion: v1                       # (필수) 이 리소스가 사용하는 Kubernetes API 버전. ServiceAccount는 core(v1) 사용.
+kind: ServiceAccount                # 생성할 리소스 종류. Jenkins가 사용할 "서비스 계정(신분증)".
+metadata:                           # 리소스 메타데이터(이름/네임스페이스/라벨 등) 시작.
+  name: jenkins                     # ServiceAccount 이름. Jenkins Deployment에서 spec.serviceAccountName: jenkins 로 연결.
+  namespace: cicd                   # 이 ServiceAccount가 존재하는 namespace. "cicd" 안에서만 유효한 신분증.
 
----
-# app 네임스페이스에서 "배포"에 필요한 최소 권한
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: jenkins-deployer
-  namespace: app
-rules:
-  # =========================
-  # Deployments / ReplicaSets
-  # - apply/rollout/status 확인에 필요
-  # =========================
-  - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---                                 # YAML 문서 구분자. 여기부터 다음 리소스(Role)가 시작됨.
 
-  # =========================
-  # Pods
-  # - rollout 중 Pod 상태 확인, 문제 발생 시 logs/exec까지 열어줄지 선택
-  # =========================
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+apiVersion: rbac.authorization.k8s.io/v1  # RBAC 리소스(API 그룹) 버전. Role/RoleBinding은 이 그룹을 씀.
+kind: Role                          # "namespace 범위" 권한 정의. ClusterRole은 클러스터 전체, Role은 특정 namespace 한정.
+metadata:                           # Role 메타데이터 시작.
+  name: jenkins-deployer            # Role 이름. "배포자" 역할을 의미(관례적 네이밍).
+  namespace: cicd                   # 이 Role이 적용되는 namespace. 즉, cicd namespace 리소스에만 권한이 적용됨.
+rules:                              # 권한 규칙 목록 시작. (여기에 허용할 API/리소스/동작을 정의)
 
-  # (선택) Jenkins에서 디버깅까지 하려면 아래 추가
-   - apiGroups: [""]
-     resources: ["pods/log"]
-     verbs: ["get"]
-   - apiGroups: [""]
-     resources: ["pods/exec"]
-     verbs: ["create"]
+###### 
+# [중요] verbs(동작) 설명
+# - get/list/watch : 조회 권한 (상태 확인, rollout status, describe 등에서 필요)
+# - create/update/patch : 생성/수정 권한 (apply, set image, scale 등에서 필요)
+# - delete : 삭제 권한 (여기서는 일부러 안 줌 = 실수로 리소스 삭제 방지)
+# 운영에서 "delete를 최소화"하는게 사고 방지에 크게 도움 된다.
+######
 
-  # =========================
-  # Services
-  # =========================
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # 앱 배포(Deployment/ReplicaSet)
+  - apiGroups: ["apps"]             # 대상 API 그룹. Deployment/ReplicaSet은 "apps" 그룹에 존재.
+    resources: ["deployments", "replicasets"] # 허용할 리소스 종류. 배포의 핵심 단위.
+    verbs: ["get", "list", "watch", "create", "update", "patch"] # 배포에 필요한 최소 동작들.
 
-  # =========================
-  # ConfigMaps / Secrets
-  # - 배포 시 envFrom, volumeMount 등에 쓰면 조회가 필요
-  # - "생성/수정"은 보안상 막아두는 게 일반적(원하면 열기)
-  # =========================
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get"]
+###### 
+# [예시] Jenkins 파이프라인에서 이 권한들이 쓰이는 대표 명령
+# - kubectl apply -n cicd -f k8s/deploy.yaml
+#   -> create/update/patch 필요 (apply는 상황에 따라 생성/수정 모두 수행)
+# - kubectl -n cicd set image deploy/myapp myapp=repo/app:123
+#   -> patch 필요 (Deployment의 spec.template 부분을 부분 수정)
+# - kubectl -n cicd rollout status deploy/myapp
+#   -> get/watch 필요 (배포 진행 상태를 계속 조회)
+######
 
-  # =========================
-  # Events (선택)
-  # - 실패 원인 파악에 도움이 됨
-  # =========================
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["get", "list"]
+  # Pod 상태 확인(배포 점검용)
+  - apiGroups: [""]                 # core API 그룹은 빈 문자열("")로 표현. (pods, services, configmaps 등)
+    resources: ["pods"]             # 파드 리소스. rollout 상태 확인/로그 확인/문제 파악에 필요.
+    verbs: ["get", "list", "watch"] # 조회만 허용. (파드 삭제/수정은 권한 없음)
 
-  # =========================
-  # Ingress를 쓴다면 (선택)
-  # =========================
-  # - apiGroups: ["networking.k8s.io"]
-  #   resources: ["ingresses"]
-  #   verbs: ["get", "list", "watch", "create", "update", "patch"]
+###### 
+# [중요] pods에 create/update를 주지 않는 이유
+# - Jenkins가 Pod를 직접 만들/수정할 필요는 거의 없다.
+# - Pod는 Deployment/ReplicaSet이 관리하는 "결과물"이기 때문에
+#   Jenkins는 상위 리소스(Deployment)만 조작하고 Pod는 조회만 하는게 안전하다.
+######
 
----
-# cicd/jenkins ServiceAccount에게 app namespace에서 위 Role을 부여
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: jenkins-deployer-binding
-  namespace: app
-subjects:
-  - kind: ServiceAccount
-    name: jenkins
-    namespace: cicd
-roleRef:
-  kind: Role
-  name: jenkins-deployer
-  apiGroup: rbac.authorization.k8s.io
+  # Service 생성/수정
+  - apiGroups: [""]                 # Service는 core 그룹.
+    resources: ["services"]         # 서비스 리소스. 배포 시 Service도 함께 apply하는 경우가 많음.
+    verbs: ["get", "list", "watch", "create", "update", "patch"] # 생성/수정/부분수정 + 조회 허용.
+
+###### 
+# [예시] Service 권한이 필요한 상황
+# - 신규 앱을 올릴 때 Deployment + Service를 같이 적용하는 형태:
+#   kubectl apply -n cicd -f k8s/
+# - 포트 변경, selector 수정 등 운영 중 서비스 스펙 변경:
+#   kubectl apply / kubectl patch svc ...
+######
+
+  # ConfigMap/Secret 조회 (배포 시 envFrom/volume 사용 시 필요)
+  - apiGroups: [""]                 # ConfigMap은 core 그룹.
+    resources: ["configmaps"]       # 환경변수/설정파일을 담는 대표 리소스.
+    verbs: ["get", "list", "watch"] # 조회만 허용. (설정 변경은 별도 권한/프로세스로 분리하는게 운영 정석)
+
+  - apiGroups: [""]                 # Secret 역시 core 그룹.
+    resources: ["secrets"]          # 민감정보(비번/토큰/키 등). Jenkins가 배포 시 참조할 수 있어야 할 때가 있음.
+    verbs: ["get", "list", "watch"] # 조회만 허용.
+
+###### 
+# [중요] Secret을 "조회(get)" 허용하는 것은 위험도가 있다
+# - Jenkins가 배포 대상 Pod가 Secret을 참조하는지 확인하려면 get/list가 필요할 수 있음.
+# - 하지만 운영 보안 관점에서는:
+#   1) Jenkins가 Secret 값을 직접 읽을 필요가 없는 구조가 더 좋고
+#   2) 꼭 필요하면 특정 Secret만 읽게 ResourceName 제한(추가 설정)도 고려한다.
+# - 현재 룰은 "실무에서 자주 쓰는 최소 실용"에 가깝고, 보안 강화는 추가 조정 포인트다.
+######
+
+  # 이벤트 조회(트러블슈팅 도움)
+  - apiGroups: [""]                 # 이벤트도 core 그룹.
+    resources: ["events"]           # 배포 실패/스케줄 실패 원인 파악(이미지 풀 실패, 프로브 실패 등)에 매우 유용.
+    verbs: ["get", "list", "watch"] # 조회만 허용.
+
+---                                 # YAML 문서 구분자. 여기부터 RoleBinding 시작.
+
+apiVersion: rbac.authorization.k8s.io/v1  # RBAC 리소스 버전.
+kind: RoleBinding                   # "ServiceAccount에게 Role을 부여"하는 연결 리소스.
+metadata:                           # RoleBinding 메타데이터.
+  name: jenkins-deployer-binding    # 바인딩 이름. 어떤 역할을 누구에게 주는지 드러내는 네이밍.
+  namespace: cicd                   # 바인딩이 적용되는 namespace. Role이 cicd이므로 바인딩도 cicd에 둔다.
+subjects:                           # 권한을 받을 주체 목록(사용자/그룹/서비스어카운트 등)
+  - kind: ServiceAccount            # 주체 타입: ServiceAccount.
+    name: jenkins                   # 권한 받을 SA 이름.
+    namespace: cicd                 # SA가 속한 namespace. (다른 namespace SA를 바인딩할 수도 있어 명시하는게 안전)
+roleRef:                            # 어떤 Role(또는 ClusterRole)을 연결할지 참조
+  apiGroup: rbac.authorization.k8s.io # roleRef가 속한 API 그룹.
+  kind: Role                        # 연결 대상 종류(Role or ClusterRole). 여기선 Role(네임스페이스 한정).
+  name: jenkins-deployer            # 연결할 Role 이름. 위에서 만든 Role을 정확히 가리킨다.
+
+###### 
+# [운영/확장] infra 같은 다른 namespace에도 배포하려면?
+# - 원칙(권장):
+#   1) infra namespace에 동일/유사 Role을 만들고
+#   2) infra namespace에 RoleBinding을 추가로 만든다
+# - 이유:
+#   * namespace 단위 최소권한 유지 (사고 범위 축소)
+#   * "어느 영역까지 Jenkins가 배포 가능한지"가 명확해짐
+#
+# [대안] ClusterRole/ClusterRoleBinding으로 전 네임스페이스 권한 부여도 가능하지만
+# - 편하긴 해도 권한이 과해져서 운영 사고/보안 리스크가 커진다.
+######
