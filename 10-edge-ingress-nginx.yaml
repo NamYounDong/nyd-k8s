@@ -6,15 +6,27 @@
 # - Ingress 리소스(호스트 기반 라우팅 규칙)를 읽어서 Service로 전달
 # ==========================================
 ---
+# (문서 구분용 ---) YAML 여러 리소스를 한 파일에 묶을 때 구분선
+
+##### 전체 개념 요약 #####
+# 이 파일은 "ingress-nginx 컨트롤러"를 edge 네임스페이스에 띄워서
+# - 외부 트래픽(EC2의 80/443)을 직접 받고(hostNetwork=true)
+# - Kubernetes Ingress 리소스를 감시하여
+# - 요청 Host/Path 규칙에 맞는 Service로 프록시 전달하는 역할을 한다.
+#
+# 단일 노드(컨트롤플레인 1대)에서 NPM을 대체하는 가장 단순한 형태로,
+# 실제 서버의 80/443을 바로 받아서 Ingress로 라우팅한다.
+##### 끝 #####
+
 # ----------------------------
 # ServiceAccount
 # - ingress controller Pod가 K8s 리소스를 읽기 위해 필요
 # ----------------------------
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ingress-nginx
-  namespace: edge
+apiVersion: v1                 # core API 그룹(v1)
+kind: ServiceAccount           # Pod가 사용할 서비스 계정(권한의 주체)
+metadata:                      # 리소스 기본 메타데이터
+  name: ingress-nginx          # ServiceAccount 이름
+  namespace: edge              # 생성될 네임스페이스(edge)
 
 ---
 # ----------------------------
@@ -22,148 +34,228 @@ metadata:
 # - ingress controller가 cluster 전반의 ingress/service/endpoints 등을 "조회"할 수 있어야 함
 # - (운영 정석: 최소권한 + 읽기 중심)
 # ----------------------------
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1   # RBAC API 그룹
+kind: ClusterRole                          # 클러스터 전역 권한(Role은 ns 한정, ClusterRole은 전역)
 metadata:
-  name: ingress-nginx
-rules:
+  name: ingress-nginx                      # ClusterRole 이름
+rules:                                     # 권한 규칙 목록
+
   # Ingress/IngressClass 조회
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses", "ingressclasses", "ingresses/status"]
-    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["networking.k8s.io"]       # networking API 그룹(ingress 관련)
+    resources: ["ingresses", "ingressclasses", "ingresses/status"]  # 접근할 리소스들
+    verbs: ["get", "list", "watch", "update"] # 동작: 조회/목록/감시 + status 업데이트용 update
+
+##### 왜 "update"가 필요하냐? #####
+# ingress-nginx는 Ingress의 상태(로드밸런서 주소 등)를 status에 기록하는 경우가 있다.
+# 이때 ingresses/status 업데이트 권한이 필요할 수 있어 update가 포함됨.
+# (단, 운영환경에서는 status 업데이트 범위를 더 좁게 튜닝하기도 함)
+##### 끝 #####
 
   # Service/Endpoints/Pods 등 라우팅 대상 조회
-  - apiGroups: [""]
+  - apiGroups: [""]                        # core API 그룹(빈 문자열)
     resources: ["services", "endpoints", "pods", "secrets", "configmaps", "namespaces", "events"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch"]        # 라우팅 대상/설정들을 읽기 위해 get/list/watch
+
+##### 각 리소스를 왜 읽냐? #####
+# services/endpoints/pods: 실제 트래픽을 어디로 보낼지(백엔드 타겟) 결정에 필요
+# secrets: TLS 인증서(https)나 인증 관련 설정 읽을 때 필요
+# configmaps: Nginx 옵션(타임아웃, 바디크기 등) 적용에 필요
+# namespaces: 멀티 네임스페이스 감시 시 필요(현재는 clusterrole이라 포함)
+# events: 컨트롤러가 이벤트를 남길 때 읽거나 기록하는 경우가 있어 종종 포함(환경마다 다름)
+##### 끝 #####
 
   # EndpointSlice 사용 환경 대비(최근 K8s에서 사용)
-  - apiGroups: ["discovery.k8s.io"]
-    resources: ["endpointslices"]
-    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]        # EndpointSlice API 그룹
+    resources: ["endpointslices"]          # EndpointSlice 리소스
+    verbs: ["get", "list", "watch"]        # 읽기/감시
+
+##### Endpoint vs EndpointSlice #####
+# 최근 K8s는 Endpoints 대신 EndpointSlice를 더 적극적으로 사용한다.
+# 대규모 서비스에서 스케일/성능을 위해 Slice로 쪼개 관리하는 방식.
+# 그래서 최신 클러스터에서는 endpointslices 권한이 없으면 라우팅이 꼬일 수 있음.
+##### 끝 #####
 
 ---
 # ----------------------------
 # ClusterRoleBinding
 # - edge 네임스페이스의 ServiceAccount에 위 ClusterRole 권한 부여
 # ----------------------------
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1   # RBAC API
+kind: ClusterRoleBinding                   # ClusterRole을 어떤 주체에 연결
 metadata:
-  name: ingress-nginx
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: ingress-nginx
-subjects:
-  - kind: ServiceAccount
-    name: ingress-nginx
-    namespace: edge
+  name: ingress-nginx                      # Binding 이름
+roleRef:                                  # "어떤 역할(권한)"을 붙일지
+  apiGroup: rbac.authorization.k8s.io      # RBAC API 그룹
+  kind: ClusterRole                        # 연결 대상은 ClusterRole
+  name: ingress-nginx                      # 위에서 만든 ClusterRole 이름
+subjects:                                 # "누구에게" 권한을 줄지(주체 목록)
+  - kind: ServiceAccount                   # 주체 타입: ServiceAccount
+    name: ingress-nginx                    # SA 이름
+    namespace: edge                        # SA가 있는 네임스페이스
+
+##### ClusterRole vs Role, Binding 차이 #####
+# Role/RoleBinding: 특정 namespace 안에서만 권한이 유효
+# ClusterRole/ClusterRoleBinding: 클러스터 전역에 적용 가능
+# ingress-nginx는 보통 여러 namespace Ingress를 감시할 수 있어 ClusterRole을 많이 씀
+##### 끝 #####
 
 ---
 # ----------------------------
 # ConfigMap (선택)
 # - nginx 동작 옵션(프록시 타임아웃, 바디 크기 등)을 중앙에서 조정
 # ----------------------------
-apiVersion: v1
-kind: ConfigMap
+apiVersion: v1               # core API
+kind: ConfigMap              # 키-값 설정 저장소
 metadata:
-  name: ingress-nginx-controller
-  namespace: edge
-data:
+  name: ingress-nginx-controller  # ConfigMap 이름 (컨트롤러 args에서 참조)
+  namespace: edge                 # 위치
+data:                             # 실제 설정 데이터(문자열 key/value)
+
   # WebSocket/SSE 등 장시간 연결 대비(기본값보다 늘림)
-  proxy-read-timeout: "3600"
-  proxy-send-timeout: "3600"
+  proxy-read-timeout: "3600"      # 업스트림(백엔드) 응답을 기다리는 시간(초)
+  proxy-send-timeout: "3600"      # 업스트림으로 전송 시 타임아웃(초)
 
   # 업로드/요청 바디 크기 제한(필요시 조정)
-  proxy-body-size: "50m"
+  proxy-body-size: "50m"          # 요청 body 최대 크기(대용량 업로드 시 필요)
+
+##### ConfigMap 옵션이 중요한 이유 #####
+# - 기본 nginx 설정은 업로드나 장시간 연결에서 끊김이 쉽게 발생할 수 있음.
+# - 특히 Jenkins, 대용량 업로드, WebSocket/SSE 같은 경우 timeout/size 조정이 필수일 수 있음.
+# - "문제 생기면 여기부터 튜닝한다"라고 생각하면 됨.
+##### 끝 #####
 
 ---
 # ----------------------------
 # Deployment: ingress-nginx controller
 # - hostNetwork=true : EC2 80/443 직접 수신(단일 노드에서 가장 단순)
 # ----------------------------
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: apps/v1             # Deployment는 apps/v1
+kind: Deployment                # 컨트롤러를 "ReplicaSet" 기반으로 관리
 metadata:
-  name: ingress-nginx-controller
-  namespace: edge
+  name: ingress-nginx-controller # Deployment 이름
+  namespace: edge                # 배포될 네임스페이스
   labels:
-    app: ingress-nginx
+    app: ingress-nginx           # 라벨(Selector에 사용)
 spec:
-  replicas: 1  # 단일 노드에서는 1개가 현실적(80/443 포트 + hostNetwork)
+  replicas: 1                    # 단일 노드 + hostNetwork(80/443)라 1개가 현실적
   selector:
     matchLabels:
-      app: ingress-nginx
-  template:
+      app: ingress-nginx         # 이 라벨을 가진 Pod를 관리
+  template:                      # 실제 Pod 템플릿
     metadata:
       labels:
-        app: ingress-nginx
+        app: ingress-nginx       # Pod 라벨(Selector와 일치해야 함)
     spec:
-      serviceAccountName: ingress-nginx
+      serviceAccountName: ingress-nginx  # 이 Pod가 사용할 SA(위에서 만든 것)
 
       # ✅ 단일 노드에서 외부 80/443을 "그대로" 받기 위한 설정
       # - NPM(hostNetwork) 방식과 동일한 진입 방식
-      hostNetwork: true
-      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: true          # Pod가 노드(EC2) 네트워크를 공유
+      dnsPolicy: ClusterFirstWithHostNet # hostNetwork 사용 시 권장되는 DNS 정책
+
+##### hostNetwork=true의 핵심 #####
+# - Pod가 노드의 네트워크 네임스페이스를 공유한다.
+# - containerPort:80/443이 곧 "노드의 80/443" 바인딩이 된다.
+# - 장점: 단일 노드에서 가장 단순 (별도 Service/NodePort 없이 바로 80/443 받음)
+# - 단점:
+#   1) 80/443는 노드에서 하나만 사용 가능 → replicas를 늘리기 어려움
+#   2) 이미 노드에서 80/443 쓰는 프로세스(nginx, apache, NPM 등)가 있으면 충돌
+#   3) 보안/네트워크 정책 측면에서 제약이 생길 수 있음
+##### 끝 #####
 
       containers:
-        - name: controller
+        - name: controller        # 컨테이너 이름
 
           # ingress-nginx 컨트롤러 이미지 (버전 고정 권장)
-          image: registry.k8s.io/ingress-nginx/controller:v1.11.2
-          imagePullPolicy: IfNotPresent
+          image: registry.k8s.io/ingress-nginx/controller:v1.11.2 # 컨트롤러 이미지
+          imagePullPolicy: IfNotPresent  # 로컬에 있으면 재다운 안함(단일 서버에서 흔히 사용)
 
           args:
             # IngressClass 이름(아래 Ingress에 ingressClassName: nginx 로 지정)
-            - /nginx-ingress-controller
-            - --ingress-class=nginx
-            - --controller-class=k8s.io/ingress-nginx
-            - --watch-ingress-without-class=false
+            - /nginx-ingress-controller              # 실행 엔트리포인트
+            - --ingress-class=nginx                  # (구버전 호환) 인그레스 클래스 이름
+            - --controller-class=k8s.io/ingress-nginx # (신규/정석) 컨트롤러 클래스 ID
+            - --watch-ingress-without-class=false    # class 없는 Ingress는 무시(안전)
+
+##### IngressClass 관련 옵션 설명 #####
+# Kubernetes Ingress는 "누가 처리할지" 지정해야 한다.
+# - Ingress에 ingressClassName: nginx 를 붙이면
+# - IngressClass(아래 리소스) name=nginx 를 찾고
+# - 그 controller 값(k8s.io/ingress-nginx)에 맞는 컨트롤러가 처리한다.
+#
+# --watch-ingress-without-class=false는
+# "클래스 지정 안된 Ingress까지 다 주워먹는 사고"를 막는 안전장치.
+##### 끝 #####
 
             # ConfigMap 연결
-            - --configmap=$(POD_NAMESPACE)/ingress-nginx-controller
+            - --configmap=$(POD_NAMESPACE)/ingress-nginx-controller # 위 ConfigMap 참조(ns/name)
 
             # publish-service는 hostNetwork 구성에서는 필수는 아니지만,
             # 일부 환경에서 external IP 표시에 도움됨(원치 않으면 제거 가능)
-            - --publish-status-address=98.88.27.53
+            - --publish-status-address=98.88.27.53 # Ingress status에 찍힐 외부 주소 강제
+
+##### --publish-status-address 주의점 #####
+# - Ingress의 status.loadBalancer.ingress 같은 곳에 "외부에서 접근할 주소"를 찍을 때 사용.
+# - 단일 노드/hostNetwork에서는 자동으로 멋지게 잡히지 않는 경우가 있어서 강제로 넣기도 함.
+# - 반드시 "네 EC2의 실제 공인IP(Elastic IP 포함)"와 일치해야 한다.
+# - 여기 값이 틀리면 "접근은 되는데 상태표시/자동화가 꼬이는" 일이 생길 수 있음.
+##### 끝 #####
 
           env:
-            - name: POD_NAMESPACE
+            - name: POD_NAMESPACE  # 환경변수 이름
               valueFrom:
                 fieldRef:
-                  fieldPath: metadata.namespace
+                  fieldPath: metadata.namespace # 현재 Pod의 namespace를 자동 주입
 
           ports:
             # hostNetwork라서 실제로 EC2의 80/443에 직접 바인딩됨
             - name: http
-              containerPort: 80
+              containerPort: 80    # 컨테이너가 열 포트 (hostNetwork라 노드 80과 동일)
             - name: https
-              containerPort: 443
+              containerPort: 443   # 컨테이너가 열 포트 (hostNetwork라 노드 443과 동일)
 
           # 리소스(단일 노드에서 control-plane 자원 잠식 방지)
           resources:
             requests:
-              cpu: "100m"
-              memory: "256Mi"
+              cpu: "100m"          # 최소 보장 CPU (0.1 core)
+              memory: "256Mi"      # 최소 보장 메모리
             limits:
-              cpu: "700m"
-              memory: "1Gi"
+              cpu: "700m"          # 최대 CPU 사용 제한
+              memory: "1Gi"        # 최대 메모리 사용 제한
+
+##### requests/limits 왜 중요? #####
+# - control-plane 1대에서 모든 걸 돌리면 ingress가 과도하게 자원 먹고 다른 Pod를 압박할 수 있음.
+# - requests는 스케줄링 기준(최소 보장), limits는 상한(폭주 방지).
+# - 실무에서도 ingress는 폭주 가능성이 있어 limits를 두는 편이 안전.
+##### 끝 #####
 
           # 기본적인 보안 옵션(너무 강하게 잠그면 기능이 깨질 수 있어 적당선)
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            allowPrivilegeEscalation: false # 프로세스가 런타임에 권한 상승(sudo류)을 못 하게 막음
+            capabilities:                   # Linux capability 제어
+              drop: ["ALL"]                 # 기본 capability 전부 제거(보안 강화)
+              add: ["NET_BIND_SERVICE"]     # 1024 미만 포트(80/443) 바인딩 가능 권한만 추가
+
+##### securityContext 핵심 #####
+# hostNetwork + 80/443 바인딩을 하려면:
+# - NET_BIND_SERVICE capability가 필요할 수 있다(너가 추가한 게 맞음).
+#
+# 다만, 환경에 따라 allowPrivilegeEscalation=false가 충돌을 일으키는 경우가 있어서
+# 만약 CrashLoop가 난다면 logs/describe에서 "permission denied"가 보이는지 확인하고,
+# 그 경우 allowPrivilegeEscalation을 true로 바꿔 해결하는 케이스가 실제로 있다.
+#
+# 결론:
+# - 보안은 "기능이 정상 동작하는 최소 범위"로 맞추는 게 실무 정석.
+##### 끝 #####
 
 ---
 # ----------------------------
 # IngressClass
 # - Ingress 리소스에서 ingressClassName: nginx 로 지정하면 이 컨트롤러가 처리
 # ----------------------------
-apiVersion: networking.k8s.io/v1
-kind: IngressClass
+apiVersion: networking.k8s.io/v1   # IngressClass는 networking API
+kind: IngressClass                 # Ingress가 사용할 "클래스" 정의
 metadata:
-  name: nginx
+  name: nginx                      # Ingress에서 ingressClassName: nginx 로 참조할 이름
 spec:
-  controller: k8s.io/ingress-nginx
+  controller: k8s.io/ingress-nginx # 어떤 컨트롤러가 이 클래스를 처리하는지 식별자
