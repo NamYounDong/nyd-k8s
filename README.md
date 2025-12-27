@@ -228,7 +228,7 @@ https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" \\
   - 내부 서비스로 라우팅  
   - SSL / TLS 종료  
   - 도메인 / 경로 기반 분기  
-```text
+```
 
 
 # ✅ 11 Jenkins + Kubernetes 배포 적용 절차 (실행 순서 & 체크포인트)
