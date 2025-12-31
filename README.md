@@ -160,8 +160,9 @@ https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" \\
 ├── 32-infra-rabbitmq.yaml
 ├── 33-infra-kafka-kraft.yaml
 ├── 34-infra-kafka-ui.yaml
-└── 35-infra-jupyter.yaml
-
+├── 35-infra-jupyter.yaml
+└── Cluster Scope 리소스
+    └─ cloudflare-dns-cluster-issue.yaml
 
 📐 단계별 의미 (네 파일 기준)  
   
@@ -419,5 +420,12 @@ kubectl create secret generic cloudflare-api-token \
 ---------------------------------------------------------------
 
 6) ClusterIssuer 생성 (DNS-01 + Cloudflare)
-kubectl apply -f cloudflare-dns-cluster-issue.yaml
+kubectl apply -f cloudflare-dns-cluster-issue.yaml (자신의 Email로 수정 후 반영)
+확인: kubectl get clusterissuer letsencrypt-prod-dns
+READY=True면 성공.
+
+7) 와일드카드 Certificate 생성
+kubectl apply -f certificate-wildcard-domain.yaml (자신의 도메인 정보로 수정 후 반영)
+확인: 
+
 ```
