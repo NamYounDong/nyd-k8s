@@ -342,3 +342,82 @@ cat /var/jenkins_home/secrets/initialAdminPassword
 ────────────────────────────────────────
 ```
 
+# ✅ 12 SSL 인증서 적용
+### *.dm-nyd.shop(와일드카드) 인증서는 “Ingress/HTTP-01”로는 발급이 안 되고, 반드시 DNS-01 방식으로만 Let’s Encrypt가 발급
+### 자동 갱신(90일마다 자동) DNS 레코드를 자동으로 넣었다 빼는 DNS API 연동이 필요. (cert-manager가 TXT 레코드를 자동 생성/삭제)
+
+## 0️⃣ 전제조건
+### A. DNS는 와일드카드로 적용
+- 호스팅사이트 레코드 A * 11.11.11.11 형식으로 등록
+### B. 와일드카드 SSL 자동화는 DNS-01 + DNS API가 필요
+- HTTP-01은 와일드카드 불가 
+- DNS-01은 가능 
+### 가비아는 별도 API를 제공하지 않으므로 CloudFlare 활용
+
+
+### CloudFlare
+```text
+1) Cloudflare에 도메인 추가
+Cloudflare 가입 / 로그인
+“Add a Site”
+도메인 입력: dm-nyd.shop
+Free Plan 선택 (유료 선택 ❌ 필요 없음)
+DNS 레코드 스캔 → 넘어감 (우리가 직접 설정할 거라 크게 신경 X)
+
+2) 네임서버 변경 (가비아 → Cloudflare)
+Cloudflare가 네임서버 2개를 보여줄 거야. 예:
+alice.ns.cloudflare.com
+bob.ns.cloudflare.com
+가비아에서 해야 할 일
+도메인 관리 → 네임서버 변경
+위 Cloudflare 네임서버 2개로 교체
+저장
+
+⏱️ 전파 시간
+보통 5~30분, 최대 수 시간
+확인: nslookup dm-nyd.shop
+Cloudflare 네임서버가 보이면 OK.
+
+3) Cloudflare DNS 레코드 설정
+Cloudflare → DNS 메뉴에서 아래처럼 설정
+-------------------------------------------
+Type: A
+Name: *
+IPv4: <네 EC2 공인 IP>
+Proxy status: DNS only (회색 구름)  ✅ 중요
+-------------------------------------------
+
+📌 이유:
+- cert-manager DNS-01이 TXT 레코드를 직접 다뤄야 함
+- Proxy(오렌지 구름) 켜면 인증 과정 꼬일 수 있음
+
+4) Cloudflare API Token 생성 (cert-manager용)
+Cloudflare → My Profile → API Tokens → Create Token
+템플릿
+- Edit zone DNS
+권한
+- Zone → DNS → Edit
+Zone Resources
+- Include → Specific zone → dm-nyd.shop
+생성 후 API Token 복사 (한 번만 보임)
+
+
+5) cert-manager Secret 생성 (Cloudflare API 토큰 저장)
+---------------------------------------------------------------
+  (1) cert-manager 네임스페이스 생성
+    kubectl create namespace cert-manager
+    확인: kubectl get ns cert-manager
+  (2) cert-manager 설치 (CRD → 본체 순서 중요)
+    kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.5/cert-manager.crds.yaml
+    kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.5/cert-manager.yaml
+    정상 기동 확인: kubectl -n cert-manager get pods
+  (3) Secret 등록(cloudeflare api key 등록)
+kubectl create secret generic cloudflare-api-token \
+  -n cert-manager \
+  --from-literal=api-token="여기에_Cloudflare_API_Token_전체문자열" \
+  --dry-run=client -o yaml | kubectl apply -f -
+---------------------------------------------------------------
+
+6) ClusterIssuer 생성 (DNS-01 + Cloudflare)
+kubectl apply -f cloudflare-dns-cluster-issue.yaml
+```
