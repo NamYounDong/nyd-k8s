@@ -161,8 +161,9 @@ https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" \\
 ├── 33-infra-kafka-kraft.yaml
 ├── 34-infra-kafka-ui.yaml
 ├── 35-infra-jupyter.yaml
-└── Cluster Scope 리소스
-    └─ cloudflare-dns-cluster-issue.yaml
+└── 리소스
+    ├── Cluster Scope : cloudflare-dns-cluster-issue.yaml
+    └── Wildcard : certificate-wildcard-domain.yaml
 
 📐 단계별 의미 (네 파일 기준)  
   
