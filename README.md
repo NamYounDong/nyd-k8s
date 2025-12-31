@@ -428,5 +428,8 @@ READY=True면 성공.
 7) 와일드카드 Certificate 생성
 kubectl apply -f certificate-wildcard-domain.yaml (자신의 도메인 정보로 수정 후 반영)
 확인: 
+kubectl -n cicd get certificate wildcard-dm-nyd-shop
+kubectl -n cicd describe certificate wildcard-dm-nyd-shop
+kubectl -n cicd get secret wildcard-dm-nyd-shop-tls
 
 ```
