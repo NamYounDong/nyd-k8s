@@ -448,7 +448,7 @@ kubectl -n cicd get secret wildcard-dm-nyd-shop-tls
 ```
 
 
-# ✅ Jenkins - Ingress Basic Auth 설정( jenkins 접근 인증 설정 )
+# ✅ 13. Jenkins - Ingress Basic Auth 설정( jenkins 접근 인증 설정 )
 ### 1️⃣ htpasswd 파일 생성 (로컬 or 서버)
 ```text
 sudo apt install -y apache2-utils
@@ -479,3 +479,76 @@ auth:  XX bytes
 kubectl apply -f 21-cicd-jenkins-ingress.yaml
 ```
 ### 4️⃣ 확인 : 젠킨스 접속 테스트
+
+# ✅ 14. Metrics Server 설치
+### 1️⃣ Metrics Server
+- 노드 / Pod의 CPU, 메모리 사용량 수집
+- kubectl top node / pod 가능하게 함
+- HPA(오토스케일)의 필수 선행조건
+### 2️⃣ 설치 (1개 서버(노드) + 개인 환경 기준)
+```text
+설치 : kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+확인 : kubectl get pods -n kube-system | grep metrics-server
+```
+### 3️⃣ ❗ 단일 노드 / kubeadm 환경에서 자주 터지는 이슈 (중요)
+```text
+- CrashLoopBackOff 나올 확률이 높음.
+  > 원인 : 
+    1) kubelet 인증서 SAN 문제
+    2) 내부 TLS 검증 실패
+
+    - 단일 노드 + kubeadm 환경에서 자주 터지는 문제 :
+      ㅇ kubelet ↔ apiserver 통신 시
+      ㅇ Node IP / hostname / cert SAN 불일치
+      ㅇ kubelet이 apiserver의 인증서를 검증 실패
+      ㅇ 결과:
+          Node NotReady
+          CrashLoopBackOff
+          x509: certificate is valid for ... not ...
+
+  > 해결책 : kubelet-insecure-tls 옵션 추가
+kubectl -n kube-system patch deployment metrics-server \
+  --type='json' \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+
+kubectl -n kube-system patch deployment metrics-server ...
+kubectl -n kube-system rollout status deployment metrics-server
+kubectl -n kube-system get pods | grep metrics-server
+
+  > ⚠️ 반드시 알아야 할 주의사항
+    이 옵션이 하는 일
+    kubelet이 apiserver 인증서 SAN 검증을 느슨하게 내부 통신은 되지만 보안은 약화
+    - 써도 되는 경우
+      1) 단일 노드
+      2) 외부 사용자 없음
+      3) 개인 서버 / 학습 / 실험
+
+    - 쓰면 안 되는 경우
+      1) 멀티 노드
+      2) 외부 트래픽
+      3) 기업/운영 환경
+      4) 인증서 체계가 명확한 클러스터
+
+### 4️⃣ Metrics Server 설정 수정 (필수)
+kubectl -n kube-system edit deployment metrics-server
+-----
+spec:
+  containers:
+  - name: metrics-server
+-----
+args에 이 줄 추가:
+-----
+args:
+  - --cert-dir=/tmp
+  - --secure-port=4443
+  - --kubelet-preferred-address-types=InternalIP
+  - --kubelet-insecure-tls
+-----
+이미 항목이 적용된 상태면 건드리지 말 것.
+확인 : kubectl get pods -n kube-system | grep metrics-server
+
+### 5️⃣ 정상 동작 확인
+kubectl top node
+kubectl top pod -A
+kubectl top pod -n cicd
+```
