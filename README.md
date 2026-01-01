@@ -138,10 +138,23 @@ https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" \\
 # Kubernetes 기본 골격 구축 완료
 
 
-
-
-
-
+# 🧱 Key, Token, 환경변수 등 관리 - Jenkins Credential 활용
+---
+## 1️⃣ Jenkins Credentia
+### 저장
+ - Jenkins 홈 디렉터리(/var/jenkins_home)에
+ - 암호화(encrypted) 되어 저장
+ - Master Key로 보호됨
+ - Credential 값은 메모리/환경변수로 잠깐 존재/Job 끝나면 사라짐
+ - 로그에 출력되면 자동 마스킹(****)
+ - 활용 예시 : 런타임 환경변수 주입 (권장)
+ ```text
+withCredentials([string(credentialsId: 'DB_PASSWORD', variable: 'DB_PASSWORD')]) {
+  sh '''
+    kubectl set env deployment/myapp DB_PASSWORD=$DB_PASSWORD
+  '''
+}
+```
 
 # 🧱 쿠버네티스 - 단일서버(No Taint) 구조 정리
 
