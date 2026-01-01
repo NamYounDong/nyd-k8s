@@ -452,7 +452,7 @@ kubectl -n cicd get secret wildcard-dm-nyd-shop-tls
 ### 1️⃣ htpasswd 파일 생성 (로컬 or 서버)
 ```text
 sudo apt install -y apache2-utils
-htpasswd -c jenkins-auth nyd6849
+htpasswd -c jenkins-auth admin
 admin은 Basic Auth용 계정명 (Jenkins 계정과 별개)
 ```
 ### 2️⃣ htpasswd를 K8s Secret으로 생성
@@ -462,14 +462,20 @@ kubectl -n cicd create secret generic jenkins-basic-auth \
   --from-file=auth=jenkins-auth
 - 확인 : 
 kubectl -n cicd get secret jenkins-basic-auth
+
+kubectl -n cicd describe secret jenkins-basic-auth
+> auth 키가 있으면 htpasswd 파일 형식으로 잘 들어간 것
+Name:         jenkins-basic-auth
+Namespace:    cicd
+Type:         Opaque
+
+Data
+====
+auth:  XX bytes
+
 ```
 ### 3️⃣ 적용
 ```text
 kubectl apply -f 21-cicd-jenkins-ingress.yaml
 ```
-### 4️⃣ 적용
-```text
-```
-### 5️⃣ 동작 확인
-```text
-```
+### 4️⃣ 확인 : 젠킨스 접속 테스트
