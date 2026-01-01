@@ -446,3 +446,30 @@ kubectl -n cicd describe certificate wildcard-dm-nyd-shop
 kubectl -n cicd get secret wildcard-dm-nyd-shop-tls
 
 ```
+
+
+# ✅ Jenkins - Ingress Basic Auth 설정( jenkins 접근 인증 설정 )
+### 1️⃣ htpasswd 파일 생성 (로컬 or 서버)
+```text
+sudo apt install -y apache2-utils
+htpasswd -c jenkins-auth nyd6849
+admin은 Basic Auth용 계정명 (Jenkins 계정과 별개)
+```
+### 2️⃣ htpasswd를 K8s Secret으로 생성
+```text
+- 생성 : 
+kubectl -n cicd create secret generic jenkins-basic-auth \
+  --from-file=auth=jenkins-auth
+- 확인 : 
+kubectl -n cicd get secret jenkins-basic-auth
+```
+### 3️⃣ 적용
+```text
+kubectl apply -f 21-cicd-jenkins-ingress.yaml
+```
+### 4️⃣ 적용
+```text
+```
+### 5️⃣ 동작 확인
+```text
+```
