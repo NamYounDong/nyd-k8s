@@ -96,7 +96,7 @@ spec:
               memory: "1Gi"
             limits:
               cpu: "1500m"
-              memory: "3Gi"
+              memory: "2Gi"
 
           #   헬스체크
           # - Jenkins는 초기 부팅이 느릴 수 있어서 initialDelay를 넉넉히 잡음
