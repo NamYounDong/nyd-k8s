@@ -167,6 +167,7 @@ withCredentials([string(credentialsId: 'DB_PASSWORD', variable: 'DB_PASSWORD')])
 ├── 00-namespaces.yaml
 ├── 01-rbac-jenkins.yaml
 ├── 10-edge-ingress-nginx.yaml
+├── 11-edge-default-404.yaml
 ├── 20-cicd-jenkins.yaml
 ├── 30-infra-mariadb.yaml
 ├── 31-infra-redis.yaml
@@ -552,3 +553,74 @@ kubectl top node
 kubectl top pod -A
 kubectl top pod -n cicd
 ```
+
+# 🧱 Lens : k8s UI 관리 툴 설치
+- 공식 사이트 : https://k8slens.dev
+1) kubeadm-config ConfigMap 덤프 (SAN 재발급 준비) 
+- kubectl -n kube-system get cm kubeadm-config -o yaml | sudo tee /root/kubeadm-config.yaml > /dev/null
+- sudo head -n 40 /root/kubeadm-config.yaml
+2) Cloudflare DNS에 전용 레코드 추가
+```text
+Type: A
+Name: k8s
+Value: <EC2 공인 IP>
+Proxy status: DNS only (회색 구름)
+```
+3) kube-apiserver SAN에 "도메인" 추가
+4) /root/kubeadm-config.yaml 수정
+- ConfigMap 껍데기 없이 아래처럼 “ClusterConfiguration만” 있는 파일이 가장 안전
+```text
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: v1.30.14
+clusterName: kubernetes
+certificatesDir: /etc/kubernetes/pki
+imageRepository: registry.k8s.io
+
+etcd:
+  local:
+    dataDir: /var/lib/etcd
+
+networking:
+  dnsDomain: cluster.local
+  podSubnet: 192.168.0.0/16
+  serviceSubnet: 10.96.0.0/12
+
+apiServer:
+  timeoutForControlPlane: 4m0s
+  certSANs:
+    - "도메인 입력력"
+    - "공인 IP 입력"
+    - "프라이빗 IP 입력"
+    - "10.96.0.1" # Kubernetes API Server
+    - "127.0.0.1"
+    - "localhost"
+```
+- sudo kubeadm certs renew apiserver --config /root/kubeadm-config.yaml
+- sudo systemctl restart kubelet
+- sudo openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -text | grep -A1 "Subject Alternative Name"
+```text
+위 상황 까지 진행했는데 마지막 명령어에서 등록한 도메인 및 IP 정보들이 안뜨면
+이슈가 발생한 상황임.
+- kubeadm이 “이미 apiserver.crt/key가 있으니 그걸 그대로 쓰겠다(재생성 안 함)” 모드로 동작해서, certSANs를 아무리 config에 넣어도 기존 cert가 그대로 남아있는 상황인 경우.
+✅ 해결 절차 (안전하게, 그대로 복붙)
+0) 백업 (필수)
+sudo mkdir -p /root/pki-backup-$(date +%F_%H%M%S)
+sudo cp -a /etc/kubernetes/pki/apiserver.crt /root/pki-backup-$(date +%F_%H%M%S)/ 2>/dev/null || true
+sudo cp -a /etc/kubernetes/pki/apiserver.key /root/pki-backup-$(date +%F_%H%M%S)/ 2>/dev/null || true
+1) 기존 apiserver 인증서/키를 “다른 이름으로” 이동(삭제 아님)
+sudo mv /etc/kubernetes/pki/apiserver.crt /etc/kubernetes/pki/apiserver.crt.old.$(date +%F_%H%M%S)
+sudo mv /etc/kubernetes/pki/apiserver.key /etc/kubernetes/pki/apiserver.key.old.$(date +%F_%H%M%S)
+2) 이제 진짜 재생성 (이번엔 “Using existing…”이 나오면 안 됨)
+sudo kubeadm init phase certs apiserver --config /root/kubeadm-config.yaml
+정상이라면 보통 “Generating …” 비슷한 메시지가 나와.
+3) apiserver 컨테이너 재기동(새 cert 읽게)
+sudo crictl --runtime-endpoint unix:///run/containerd/containerd.sock ps | grep kube-apiserver
+나온 컨테이너 ID로:
+sudo crictl --runtime-endpoint unix:///run/containerd/containerd.sock stop <ID>
+sudo crictl --runtime-endpoint unix:///run/containerd/containerd.sock rm <ID>
+(꺽쇠 < >는 쓰는 게 아니라 ID로 치환)
+4) SAN 확인
+sudo openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -text | grep -A1 "Subject Alternative Name"
+```
+5) lens 실행 후 add file system을 통해 ~/.kube/config 에서 받은 파일 세팅

@@ -1,0 +1,163 @@
+---
+# ==========================================
+# Default 404 안내 페이지 (edge)
+# - Ingress에 매칭되지 않는 host/path 요청을 이 서비스로 보냄
+# - 목적: 없는 도메인/없는 경로 접근 시 깔끔한 404 안내 + 정보노출 최소화
+# ==========================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: default-404-html
+  namespace: edge
+data:
+  index.html: |
+    <!doctype html>
+    <html lang="ko">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>404 Not Found</title>
+        <style>
+          body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background:#0b1020; color:#e8eaf0; }
+          .wrap { min-height: 100vh; display:flex; align-items:center; justify-content:center; padding: 24px; }
+          .card { max-width: 720px; width: 100%; background:#111a33; border:1px solid #22305a; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+          h1 { margin: 0 0 8px; font-size: 22px; }
+          p { margin: 10px 0; line-height: 1.6; color:#c9d2ea; }
+          code { background:#0b1020; padding: 2px 6px; border-radius: 8px; }
+          .hint { margin-top: 14px; font-size: 13px; color:#9fb0da; }
+          .small { font-size: 12px; opacity:.9 }
+        </style>
+      </head>
+      <body>
+        <div class="wrap">
+          <div class="card">
+            <h1>404 Not Found</h1>
+            <p>요청하신 주소(도메인/경로)를 찾을 수 없습니다.</p>
+            <p class="small">
+              이 페이지는 <code>Ingress</code>에서 라우팅 규칙에 매칭되지 않은 요청에 대해 표시됩니다.
+            </p>
+            <p class="hint">
+              • 도메인(Host)이 올바른지 확인해주세요.<br/>
+              • 서비스가 아직 배포되지 않았거나 Ingress 규칙이 없을 수 있습니다.
+            </p>
+          </div>
+        </div>
+      </body>
+    </html>
+
+---
+# ==========================================
+# 404 페이지를 반환하는 매우 단순한 웹서버(nginx)
+# - 어떤 경로로 오든 404 + 안내페이지를 반환하도록 설정
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: default-404
+  namespace: edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: default-404
+  template:
+    metadata:
+      labels:
+        app: default-404
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+      volumes:
+        # 안내 페이지 HTML 주입
+        - name: html
+          configMap:
+            name: default-404-html
+        # 어떤 요청이든 404로 응답하게 하는 nginx 설정
+        - name: nginx-conf
+          configMap:
+            name: default-404-nginx-conf
+
+---
+# nginx 설정(ConfigMap)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: default-404-nginx-conf
+  namespace: edge
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      server_name _;
+
+      # 모든 요청에 대해 404 상태코드로 안내페이지 반환
+      location / {
+        root /usr/share/nginx/html;
+        add_header Cache-Control "no-store";
+        return 404;
+      }
+
+      # 위 return 404로 인해 기본 nginx 404 바디가 나오지 않게
+      # error_page로 우리가 만든 안내페이지를 반환
+      error_page 404 /index.html;
+
+      location = /index.html {
+        root /usr/share/nginx/html;
+        internal;
+      }
+    }
+
+---
+# ==========================================
+# Service: Ingress가 이 404 Pod로 트래픽을 보낼 때 사용
+# ==========================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: default-404-svc
+  namespace: edge
+spec:
+  selector:
+    app: default-404
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+
+---
+# ==========================================
+# Catch-all Ingress (host 지정 없음)
+# - 어떤 Ingress 규칙에도 매칭되지 않는 요청을 default-404-svc로 보냄
+# - ⚠️ 주의: 기존에 host 기반 Ingress들이 있으면 그것들이 우선 매칭되고,
+#          매칭 실패한 요청만 이쪽으로 떨어짐.
+# ==========================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: default-404-ingress
+  namespace: edge
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: default-404-svc
+                port:
+                  number: 80
