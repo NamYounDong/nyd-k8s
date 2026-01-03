@@ -4,39 +4,39 @@
 > Ubuntu 22.04 LTS 권장
 
 ## 보안그룹 열어야 할 포트
-포트	용도
-22 : SSH
-6443 : Kubernetes API 서버
-80, 443 : 나중에 NPM 또는 Ingress로 외부 서비스
-30000–32767 : NodePort 기본 포트 범위 (선택)
-나중에 Ingress Controller 쓰면 80/443 정도만 쓰게 됨.
+포트	용도  
+22 : SSH  
+6443 : Kubernetes API 서버  
+80, 443 : 나중에 NPM 또는 Ingress로 외부 서비스  
+30000–32767 : NodePort 기본 포트 범위 (선택)  
+나중에 Ingress Controller 쓰면 80/443 정도만 쓰게 됨.  
 
 # ✅ 2. OS 기본 설정
-접속 후:
-sudo apt update \\\&\\\& sudo apt upgrade -y
-sudo timedatectl set-timezone Asia/Seoul
+접속 후:  
+sudo apt update \\\&\\\& sudo apt upgrade -y  
+sudo timedatectl set-timezone Asia/Seoul  
 
-# ✅ 3. swap 완전 OFF (K8s 필수)
-sudo swapoff -a
-sudo sed -i '/ swap / s/^/#/' /etc/fstab
+# ✅ 3. swap 완전 OFF (K8s 필수)  
+sudo swapoff -a  
+sudo sed -i '/ swap / s/^/#/' /etc/fstab  
 
 
-#✅ 4. 커널 모듈 + sysctl 설정
-K8s + containerd가 정상 동작하려면 필수.
-## 4-1. 커널 모듈 등록
-### cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
-> br\_netfilter
-> overlay
-> EOF
-### sudo modprobe br\_netfilter
-### sudo modprobe overlay
+#✅ 4. 커널 모듈 + sysctl 설정  
+K8s + containerd가 정상 동작하려면 필수.  
+## 4-1. 커널 모듈 등록  
+### cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf  
+> br\_netfilter  
+> overlay  
+> EOF  
+### sudo modprobe br\_netfilter  
+### sudo modprobe overlay  
 
-## 4-2. 네트워크 셋팅
-### cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
-> net.bridge.bridge-nf-call-iptables=1
-> net.bridge.bridge-nf-call-ip6tables=1
-> net.ipv4.ip\_forward=1
-> EOF
+## 4-2. 네트워크 셋팅  
+### cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf  
+> net.bridge.bridge-nf-call-iptables=1  
+> net.bridge.bridge-nf-call-ip6tables=1  
+> net.ipv4.ip\_forward=1  
+> EOF  
 ### sudo sysctl --system
 
 ### Kubernetes는 Linux 커널 기능 몇 가지를 필수로 요구함.
@@ -624,3 +624,176 @@ sudo crictl --runtime-endpoint unix:///run/containerd/containerd.sock rm <ID>
 sudo openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -text | grep -A1 "Subject Alternative Name"
 ```
 5) lens 실행 후 add file system을 통해 ~/.kube/config 에서 받은 파일 세팅
+```text
+✅ Overview
+클러스터 전체 요약 대시보드
+노드 수 / 상태
+CPU·메모리 사용량
+Kubernetes 버전
+Control Plane 상태
+📌 활용
+“클러스터 살아있나?” 1초 체크
+장애 발생 시 가장 먼저 확인
+📦 Applications
+Helm 기반 애플리케이션 묶음 보기
+Helm Release 단위로 리소스 묶어서 표시
+📌 활용
+cert-manager / ingress-nginx / monitoring 스택 확인
+“이 서비스 Helm으로 설치됐나?” 판단
+🖥 Nodes
+노드(서버) 상태 관리
+Ready / NotReady
+CPU·Memory 사용률
+Pod 배치 현황
+Taint / Label
+📌 활용
+노드 리소스 부족 확인
+특정 노드에 Pod 몰림 확인
+장애 노드 격리 (cordon/drain)
+🚀 Workloads
+“실제로 돌아가는 애들”
+▸ Overview
+전체 워크로드 요약
+▸ Pods
+실제 실행 단위
+로그 / 터미널 접속 가능
+📌 활용
+CrashLoopBackOff 원인 분석
+로그 실시간 확인
+▸ Deployments
+stateless 앱 (API 서버, 프론트 등)
+📌 활용
+무중단 배포 (rolling update)
+replica 수 조절
+▸ DaemonSets
+모든 노드에 1개씩 실행
+예: calico-node, node-exporter
+📌 활용
+네트워크 / 로그 / 모니터링 에이전트
+▸ StatefulSets
+DB, Kafka, Redis 등
+고정된 Pod 이름 + 볼륨
+📌 활용
+Kafka, MariaDB, etcd
+▸ Jobs / CronJobs
+일회성 / 주기성 작업
+📌 활용
+DB 백업
+배치 ETL
+인증서 갱신 확인용 Job
+⚙ Config
+“설정 레이어”
+▸ ConfigMaps
+환경설정 (비밀 아님)
+📌 예시
+nginx.conf
+app.yml
+▸ Secrets
+비밀정보
+📌 예시
+DB 비밀번호
+OAuth Secret
+Cloudflare API Token (cert-manager)
+▸ Resource Quotas / Limit Ranges
+Namespace 자원 제한
+📌 활용
+팀별 리소스 폭주 방지
+▸ HPA
+CPU/메모리 기반 자동 스케일링
+▸ Mutating / Validating Webhooks
+리소스 생성 시 개입 로직
+📌 예시
+cert-manager
+Istio
+보안 정책 강제
+🌐 Network
+“외부/내부 통신”
+▸ Services
+Pod 묶음에 대한 접근 포인트
+📌 예시
+ClusterIP
+NodePort
+LoadBalancer
+▸ Endpoints
+실제 연결된 Pod IP 목록
+📌 활용
+Service가 왜 안 붙는지 디버깅
+▸ Ingress
+HTTP/HTTPS 진입점
+📌 예시
+k8s.dm-nyd.shop → ingress-nginx → 서비스
+▸ Ingress Classes
+nginx / traefik 구분
+▸ Network Policies
+Pod 간 통신 차단/허용
+📌 활용
+보안 격리
+▸ Port Forwarding
+로컬 → Pod 직접 연결
+📌 활용
+DB, 내부 API 테스트
+💾 Storage
+“데이터”
+▸ PVC (PersistentVolumeClaims)
+Pod가 요청한 볼륨
+▸ PV (PersistentVolumes)
+실제 디스크
+📌 활용
+Jenkins / DB 데이터 유지
+볼륨 안 붙는 문제 추적
+▸ Storage Classes
+볼륨 생성 정책
+📌 예시
+hostPath
+EBS
+NFS
+🧩 Namespaces
+논리적 구역 분리
+📌 예시
+kube-system
+cert-manager
+cicd
+edge
+📜 Events
+장애 분석 핵심
+“왜 안 떴는지” 이유가 여기에 있음
+📌 활용
+ImagePullBackOff
+FailedScheduling
+⛵ Helm
+▸ Charts
+Helm 차트 목록
+▸ Releases
+실제 설치된 Helm 앱
+📌 활용
+cert-manager 재설치
+ingress-nginx 버전 관리
+🔐 Access Control
+권한
+▸ ServiceAccounts
+Pod용 계정
+▸ Roles / RoleBindings
+Namespace 단위 권한
+▸ ClusterRoles / ClusterRoleBindings
+클러스터 전체 권한
+📌 활용
+Jenkins / CI 권한 부여
+운영자 권한 제어
+🧬 Custom Resources
+CRD
+▸ Definitions
+CRD 목록
+▸ cert-manager.io
+Certificate
+ClusterIssuer
+Issuer
+📌 활용
+지금 네가 다룬 TLS / DNS-01 / Cloudflare 여기서 관리
+🔚 정리 한 줄 요약
+Lens는 kubectl을 “시각화 + 디버거 + 운영 콘솔”로 만든 도구
+지금 상태는:
+✅ API Server 정상
+✅ SAN 문제 해결됨
+✅ Lens 연결 정상
+✅ cert-manager CRD 인식됨
+```
